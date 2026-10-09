@@ -1,0 +1,36 @@
+[package]
+name = "throttle-setup"
+version = "1.0.0"
+edition = "2021"
+description = "Assistant d'installation (wizard) du driver minifilter limiteur de débit"
+
+[lib]
+name = "throttle_setup"
+path = "src/lib.rs"
+
+[[bin]]
+name = "throttle-setup"
+path = "src/main.rs"
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe"]
+
+[dependencies]
+eframe = { version = "0.29", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1

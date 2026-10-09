@@ -1,0 +1,60 @@
+;
+; throttle.inf — Installation du minifilter « Limiteur de débit dossier ».
+;
+; Altitude 399999 : altitude de TEST. Pour une diffusion en production,
+; réserve une altitude officielle auprès de Microsoft (via le programme
+; File system minifilter altitude allocation).
+;
+
+[Version]
+Signature   = "$Windows NT$"
+Class       = "ActivityMonitor"
+ClassGuid   = {b86dff51-a31e-4bac-b3cf-e8cfe75c9fc2}
+Provider    = %ProviderString%
+CatalogFile = throttle.cat
+DriverVer   = 10/09/2026,1.0.0.0
+
+[DestinationDirs]
+DefaultDestDir          = 12
+Throttle.DriverFiles    = 12
+
+[DefaultInstall]
+OptionDesc  = %ThrottleServiceDesc%
+CopyFiles   = Throttle.DriverFiles
+AddReg      = Throttle.AddReg
+
+[DefaultInstall.Services]
+AddService  = throttle,,Throttle.Service
+
+[DefaultUninstall]
+DelFiles    = Throttle.DriverFiles
+
+[DefaultUninstall.Services]
+DelService  = throttle,0x200
+
+[Throttle.Service]
+DisplayName = %ThrottleServiceDesc%
+Description = %ThrottleServiceDesc%
+ServiceBinary = %12%\throttle.sys
+Dependencies  = FltMgr
+ServiceType   = 2                ; SERVICE_FILE_SYSTEM_DRIVER
+StartType     = 3                ; SERVICE_DEMAND_START
+
+[Throttle.AddReg]
+HKR,"Instances","DefaultInstance",0x00000000,"throttle - Default Instance"
+HKR,"Instances\throttle - Default Instance","Altitude",0x00000000,"399999"
+HKR,"Instances\throttle - Default Instance","Flags",0x00000000,"0"
+
+[Throttle.DriverFiles]
+throttle.sys
+
+[SourceDisksFiles]
+throttle.sys = 1,,
+
+[SourceDisksNames]
+1 = %DiskId%,,,
+
+[Strings]
+ProviderString      = "Local build"
+DiskId              = "Throttle — disque d'installation"
+ThrottleServiceDesc = "Limiteur de débit dossier (minifilter)"

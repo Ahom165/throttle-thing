@@ -1,0 +1,34 @@
+[package]
+name = "throttle-folder"
+version = "1.0.0"
+edition = "2021"
+description = "Limiteur de débit lecture/écriture sur un dossier (Windows, via minifilter)"
+
+[lib]
+name = "throttle_folder"
+path = "src/lib.rs"
+
+[[bin]]
+name = "throttle-folder"
+path = "src/main.rs"
+
+[dependencies]
+eframe = { version = "0.29", optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.52", features = [
+    "Win32_Storage_InstallableFileSystems",
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Threading",
+] }
+
+[features]
+default = ["gui"]
+gui = ["dep:eframe"]
+
+[profile.release]
+opt-level = 2
+lto = true
+codegen-units = 1
