@@ -155,7 +155,12 @@ impl SetupApp {
         self.intent = Intent::Install;
         self.filter_loaded = false;
         self.page = Page::Progress;
-        self.queue.push_back(Action::CheckState);
+        // L'état est déjà sondé à la première frame (update) : on ne relance
+        // la détection que si elle n'a rien donné, sinon le bloc [etat]
+        // s'afficherait une seconde fois.
+        if self.testsigning.is_none() {
+            self.queue.push_back(Action::CheckState);
+        }
     }
 
     fn start_uninstall(&mut self) {

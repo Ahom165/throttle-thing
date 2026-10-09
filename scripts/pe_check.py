@@ -6,6 +6,9 @@ de débogage (erreur fltmc 0x800701E7 = STATUS_CONFLICTING_ADDRESSES /
 STATUS_NOT_MAPPED_DATA) :
 
   - PE32+, SUBSYSTEM NATIVE, entry point présent
+  - IMAGE_FILE_DLL présent : un .sys est une image « DLL » NATIVE ; sans
+    ce bit le noyau traite l'image comme un exe à adresse fixe et la
+    recharge avec STATUS_CONFLICTING_ADDRESSES (fltmc : 0x800701E7)
   - SectionAlignment == FileAlignment == 0x1000 (le noyau mappe l'image
     page par page : un fichier driver aligné à 0x200 est refusé au
     chargement, contrairement à un exe utilisateur)
@@ -101,8 +104,10 @@ def main(path: str) -> None:
              "(le noyau refuse un driver dont le fichier est aligné à 0x200)")
     if not (coff_chars & 0x0002):
         fail("COFF: IMAGE_FILE_EXECUTABLE_IMAGE absent")
-    if coff_chars & 0x2000:
-        fail("COFF: IMAGE_FILE_DLL inattendu pour un .sys")
+    if not (coff_chars & 0x2000):
+        fail("COFF: IMAGE_FILE_DLL absent : un .sys doit être une image DLL "
+             "(0x2022+, lier avec /DLL) sinon le noyau renvoie "
+             "STATUS_CONFLICTING_ADDRESSES (0x800701E7)")
     if ndd != 16:
         fail(f"NumberOfRvaAndSizes = {ndd} (16 attendu)")
 

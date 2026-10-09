@@ -5,7 +5,7 @@
 #
 # Pipeline :
 #   1. zig (clang embarqué)  -> compilation C en ABI MSVC, mode noyau
-#   2. rust-lld (lld-link)   -> édition de liens /DRIVER /SUBSYSTEM:NATIVE
+#   2. rust-lld (lld-link)   -> édition de liens /DLL /DRIVER /SUBSYSTEM:NATIVE
 #   3. osslsigncode          -> signature Authenticode (certificat de test)
 #
 # Prérequis téléchargés automatiquement (aucun droit root requis) :
@@ -46,7 +46,7 @@ mkdir -p "$B" && cd "$B"
 
 # --- 3. overlay insensible à la casse ------------------------------------
 rm -rf overlay
-python3 /home/z/my-project/scripts/build_case_overlay.py
+python3 "$(dirname "$0")/build_case_overlay.py"
 
 # --- 4. compilation -------------------------------------------------------
 O="$B/overlay"
@@ -58,14 +58,20 @@ O="$B/overlay"
   -fno-stack-protector -O2 -w
 
 # --- 5. lien noyau --------------------------------------------------------
-# /FILEALIGN:4096 : le noyau refuse de charger un driver dont les données
-# brutes sont alignées à 0x200 (0x800701E7 = ERROR_INVALID_ADDRESS, issu de
-# STATUS_CONFLICTING_ADDRESSES / STATUS_NOT_MAPPED_DATA) alors qu'un exe
-# utilisateur l'accepte. Le WDK aligne les fichiers driver sur 4 Ko.
+# /DLL : OBLIGATOIRE. Un .sys est une image « DLL » du sous-système NATIVE :
+# le bit IMAGE_FILE_DLL (0x2000) fait partie de ce que le chargeur noyau
+# exige (tous les drivers Microsoft ont COFF chars = 0x2122). Sans /DLL,
+# lld-link pose EXECUTABLE_IMAGE (0x0022) et traite l'image comme un exe à
+# adresse fixe : le noyau tente de la mapper à l'ImageBase brute (0x14xxxxxxx,
+# plage utilisateur) → STATUS_CONFLICTING_ADDRESSES → win32 487
+# → « fltmc load : 0x800701E7 », sans le moindre événement CodeIntegrity.
+# /FILEALIGN:4096 : alignement fichier 4 Ko comme le WDK (mapping page à page).
+# /BASE:0x1C0000000 : ImageBase conventionnelle des drivers x64 modernes.
 L="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
 LIBD="$B/wdk/c/Lib/10.0.26100.0/km/x64"
 "$L" -flavor link /OUT:throttle.sys /MACHINE:X64 /SUBSYSTEM:NATIVE,10.00 \
-  /DRIVER /ENTRY:DriverEntry /NODEFAULTLIB /FILEALIGN:4096 \
+  /DLL /DRIVER /ENTRY:DriverEntry /NODEFAULTLIB /FILEALIGN:4096 \
+  /BASE:0x1C0000000 /DYNAMICBASE /NXCOMPAT \
   throttle.obj "$LIBD/ntoskrnl.lib" "$LIBD/fltMgr.lib" "$LIBD/hal.lib"
 
 # --- 6. signature (certificat de test auto-signé) ------------------------
