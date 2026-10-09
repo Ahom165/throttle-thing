@@ -103,6 +103,10 @@ struct SetupApp {
     queue: std::collections::VecDeque<Action>,
     log: String,
     started: bool,
+    /// Le bloc [etat] ne doit s'afficher qu'une fois (détection d'ouverture) :
+    /// CheckState est re-exécuté au clic sur « Installer » — pas pour l'affiche
+    /// mais parce que c'est lui qui met en file les actions d'installation.
+    state_announced: bool,
     testsigning: Option<bool>,
     hvci: Option<bool>,
     service_installed: bool,
@@ -136,6 +140,7 @@ impl SetupApp {
             queue,
             log,
             started,
+            state_announced: false,
             testsigning: None,
             hvci: None,
             service_installed: false,
@@ -155,12 +160,11 @@ impl SetupApp {
         self.intent = Intent::Install;
         self.filter_loaded = false;
         self.page = Page::Progress;
-        // L'état est déjà sondé à la première frame (update) : on ne relance
-        // la détection que si elle n'a rien donné, sinon le bloc [etat]
-        // s'afficherait une seconde fois.
-        if self.testsigning.is_none() {
-            self.queue.push_back(Action::CheckState);
-        }
+        // CheckState est OBLIGATOIRE ici : au-delà de l'affichage, c'est lui
+        // qui met en file les actions d'installation (install_actions) une
+        // fois l'état (test-signature, HVCI) connu. La répétition du bloc
+        // [etat] est évitée par state_announced, pas en sautant la détection.
+        self.queue.push_back(Action::CheckState);
     }
 
     fn start_uninstall(&mut self) {
@@ -191,11 +195,6 @@ impl SetupApp {
             Action::CheckState => {
                 let (_ok, out) = logic::run_cmd("bcdedit", &["/enum", "{current}"]);
                 self.testsigning = logic::parse_testsigning(&out);
-                match self.testsigning {
-                    Some(true) => self.say("[etat] mode test-signature : ACTIF"),
-                    Some(false) => self.say("[etat] mode test-signature : INACTIF"),
-                    None => self.say("[etat] mode test-signature : inconnu"),
-                }
                 // Intégrité de la mémoire (HVCI) : clé moderne puis ancienne.
                 let (okh, outh) = logic::run_cmd("reg", &["query", logic::HVCI_KEY, "/v", "Enabled"]);
                 self.hvci = if okh {
@@ -205,20 +204,31 @@ impl SetupApp {
                         logic::run_cmd("reg", &["query", logic::HVCI_KEY_OLD, "/v", "EnableHVCI"]);
                     logic::parse_hvci_enabled(&out2)
                 };
-                match self.hvci {
-                    Some(true) => self.say("[etat] intégrité de la mémoire (HVCI) : ACTIVE — Windows 11 bloque les drivers de test tant qu'elle est active"),
-                    Some(false) => self.say("[etat] intégrité de la mémoire (HVCI) : inactive"),
-                    // Clé absente = HVCI non forcée (valeur par défaut hors
-                    // stratégies d'entreprise) — c'est ce qu'on veut.
-                    None => self.say("[etat] intégrité de la mémoire (HVCI) : désactivée (clé absente)"),
-                }
                 let (ok, _) = logic::run_cmd("sc", &["query", logic::SVC]);
                 self.service_installed = ok;
-                self.say(&format!(
-                    "[etat] service '{}' : {}",
-                    logic::SVC,
-                    if ok { "installé" } else { "absent" }
-                ));
+                // Détection TOUJOURS exécutée (c'est elle qui décide des
+                // actions) ; le bloc [etat], lui, ne s'affiche qu'une fois
+                // (première frame) pour ne pas répéter trois lignes identiques.
+                if !self.state_announced {
+                    self.state_announced = true;
+                    match self.testsigning {
+                        Some(true) => self.say("[etat] mode test-signature : ACTIF"),
+                        Some(false) => self.say("[etat] mode test-signature : INACTIF"),
+                        None => self.say("[etat] mode test-signature : inconnu"),
+                    }
+                    match self.hvci {
+                        Some(true) => self.say("[etat] intégrité de la mémoire (HVCI) : ACTIVE — Windows 11 bloque les drivers de test tant qu'elle est active"),
+                        Some(false) => self.say("[etat] intégrité de la mémoire (HVCI) : inactive"),
+                        // Clé absente = HVCI non forcée (valeur par défaut hors
+                        // stratégies d'entreprise) — c'est ce qu'on veut.
+                        None => self.say("[etat] intégrité de la mémoire (HVCI) : désactivée (clé absente)"),
+                    }
+                    self.say(&format!(
+                        "[etat] service '{}' : {}",
+                        logic::SVC,
+                        if ok { "installé" } else { "absent" }
+                    ));
+                }
                 if self.intent == Intent::Install {
                     for a in logic::install_actions(self.testsigning, self.hvci) {
                         self.queue.push_back(a);
