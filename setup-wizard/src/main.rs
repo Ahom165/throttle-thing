@@ -203,7 +203,9 @@ impl SetupApp {
                 match self.hvci {
                     Some(true) => self.say("[etat] intégrité de la mémoire (HVCI) : ACTIVE — Windows 11 bloque les drivers de test tant qu'elle est active"),
                     Some(false) => self.say("[etat] intégrité de la mémoire (HVCI) : inactive"),
-                    None => self.say("[etat] intégrité de la mémoire (HVCI) : état inconnu"),
+                    // Clé absente = HVCI non forcée (valeur par défaut hors
+                    // stratégies d'entreprise) — c'est ce qu'on veut.
+                    None => self.say("[etat] intégrité de la mémoire (HVCI) : désactivée (clé absente)"),
                 }
                 let (ok, _) = logic::run_cmd("sc", &["query", logic::SVC]);
                 self.service_installed = ok;
@@ -328,7 +330,7 @@ impl SetupApp {
                     if self.needs_reboot {
                         self.say("→ Normal : le mode test et/ou l'HVCI viennent d'être modifiés.\n→ REDÉMARRE le PC, puis relance cet assistant : il chargera le filtre et terminera l'installation.");
                     } else {
-                        self.say("→ Vérifie : session administrateur, mode test actif (bcdedit /enum {current}), et « Intégrité de la mémoire » désactivée (Sécurité Windows → Isolation du noyau). Code 0xC0000428 = signature refusée.");
+                        self.say("→ Vérifie : session administrateur, mode test actif (bcdedit /enum {current}), et « Intégrité de la mémoire » désactivée (Sécurité Windows → Isolation du noyau).\n→ Code 0xC0000428 = signature refusée. Code 0x800701E7 = image du driver refusée par le noyau (structure/alignement) — installe la dernière version de l'assistant.");
                     }
                 }
             }

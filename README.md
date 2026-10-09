@@ -173,6 +173,7 @@ de la v1.
 | « Connexion au driver impossible … administrateur » | Lance l'exe **en tant qu'administrateur** |
 | « … fltmc load throttle » | Le driver n'est pas chargé → `install.bat` |
 | `fltmc load` échoue avec 0xC0000428 | Signature : `bcdedit /set testsigning on` + redémarrage — et sur **Windows 11**, désactive l'« Intégrité de la mémoire » (Sécurité Windows → Isolation du noyau), elle bloque aussi les drivers de test |
+| `fltmc load` échoue avec 0x800701E7 (adresse invalide) | Image du driver refusée par le noyau (alignement fichier < 4 Ko) — les versions < v1.0.2 étaient liées avec un alignement 512 octets ; réinstalle avec la dernière version de l'assistant. Le journal `Microsoft-Windows-CodeIntegrity/Operational` (Observateur d'événements) donne le motif exact |
 | Windows 11 : le mode test est actif mais le driver refuse de se charger | **Intégrité de la mémoire (HVCI) active** → Sécurité Windows → Sécurité de l'appareil → Isolation du noyau → « Intégrité de la mémoire » = **Désactivée** + redémarrage (l'assistant le fait automatiquement) |
 | Vitesse non bridée sur une copie | La copie passe par le cache/pagination ou un volume réseau (hors v1) ; essaie avec un gros fichier (> 1 Go) |
 | Statut « ⚠ le driver n'est plus actif » | Quelqu'un a fait `fltmc unload throttle` → recharge |

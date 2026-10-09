@@ -58,10 +58,14 @@ O="$B/overlay"
   -fno-stack-protector -O2 -w
 
 # --- 5. lien noyau --------------------------------------------------------
+# /FILEALIGN:4096 : le noyau refuse de charger un driver dont les données
+# brutes sont alignées à 0x200 (0x800701E7 = ERROR_INVALID_ADDRESS, issu de
+# STATUS_CONFLICTING_ADDRESSES / STATUS_NOT_MAPPED_DATA) alors qu'un exe
+# utilisateur l'accepte. Le WDK aligne les fichiers driver sur 4 Ko.
 L="$HOME/.rustup/toolchains/stable-x86_64-unknown-linux-gnu/lib/rustlib/x86_64-unknown-linux-gnu/bin/rust-lld"
 LIBD="$B/wdk/c/Lib/10.0.26100.0/km/x64"
 "$L" -flavor link /OUT:throttle.sys /MACHINE:X64 /SUBSYSTEM:NATIVE,10.00 \
-  /DRIVER /ENTRY:DriverEntry /NODEFAULTLIB \
+  /DRIVER /ENTRY:DriverEntry /NODEFAULTLIB /FILEALIGN:4096 \
   throttle.obj "$LIBD/ntoskrnl.lib" "$LIBD/fltMgr.lib" "$LIBD/hal.lib"
 
 # --- 6. signature (certificat de test auto-signé) ------------------------
@@ -79,6 +83,8 @@ LIBD="$B/wdk/c/Lib/10.0.26100.0/km/x64"
   -keyout throttle-test.key -out throttle-test.cer -days 3650 -nodes \
   -subj "/CN=Throttle Dev Test/O=Local" -addext "extendedKeyUsage=codeSigning"
 
+# osslsigncode refuse d'écraser une sortie existante : re-runs propres.
+rm -f throttle-signed.sys
 ./osslsigncode-2.10/osslsigncode sign -certs throttle-test.cer \
   -key throttle-test.key -h sha256 -n "Throttle Dev Test" -i "https://localhost" \
   -in throttle.sys -out throttle-signed.sys
@@ -93,5 +99,5 @@ mkdir -p "$EMBED"
 cp throttle-signed.sys "$EMBED/throttle.sys"
 cp throttle-test.cer   "$EMBED/throttle-test.cer"
 
-python3 /home/z/my-project/scripts/pe_check.py "$OUT/throttle.sys"
+python3 "$(dirname "$0")/pe_check.py" "$OUT/throttle.sys"
 echo "throttle.sys compilé, linké et signé → $OUT"
