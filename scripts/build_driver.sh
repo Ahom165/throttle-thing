@@ -87,5 +87,11 @@ mkdir -p "$OUT"
 cp throttle-signed.sys "$OUT/throttle.sys"
 cp throttle-test.cer  "$OUT/throttle-test.cer"
 
+# Le wizard embarque le .sys + le .cer (setup-wizard/embed) : resynchronisation.
+EMBED=/home/z/my-project/download/throttle-folder/setup-wizard/embed
+mkdir -p "$EMBED"
+cp throttle-signed.sys "$EMBED/throttle.sys"
+cp throttle-test.cer   "$EMBED/throttle-test.cer"
+
 python3 /home/z/my-project/scripts/pe_check.py "$OUT/throttle.sys"
 echo "throttle.sys compilé, linké et signé → $OUT"

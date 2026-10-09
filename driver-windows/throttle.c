@@ -136,10 +136,18 @@ ThrottleAcquire(
         now = KeQueryInterruptTime();
         delta = now - Bucket->LastTick;
         Bucket->LastTick = now;
-        if (delta > 20000000) {         /* clamp à 2 s : évite les débordements */
+        if (delta > 20000000) {         /* clamp à 2 s : borne le calcul     */
             delta = 20000000;
         }
-        Bucket->Tokens += delta * Rate;
+        /* Recharge : delta est en unités de 100 ns (10 000 000 par seconde),
+         * Rate en octets/s. On crédite donc (delta * Rate) / 10 000 000.
+         * Forme éclatée (partie entière + fractionnaire) : résultat strictement
+         * identique à ((delta * Rate) / 10000000ULL) mais sans débordement
+         * possible du produit, et précision sub-seconde conservée — les
+         * recharges durent typiquement quelques millisecondes, où un simple
+         * delta / 10000000 donnerait 0.                                         */
+        Bucket->Tokens += (delta / 10000000ULL) * Rate
+                        + ((delta % 10000000ULL) * Rate) / 10000000ULL;
         if (Bucket->Tokens > Bucket->Capacity) {
             Bucket->Tokens = Bucket->Capacity;
         }
