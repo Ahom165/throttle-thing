@@ -311,6 +311,43 @@ impl SetupApp {
                         short(&out)
                     )
                 });
+                // Un service pré-existant peut pointer vers un ancien
+                // binPath (fichier déplacé/supprimé) : au chargement ça
+                // donne 0x80070002 = fichier introuvable. On journalise
+                // son ImagePath puis on force la configuration à jour.
+                let (okq, outq) = logic::run_cmd("sc", &["qc", logic::SVC]);
+                if okq {
+                    for l in outq.lines() {
+                        let t = l.trim();
+                        if t.contains("BINARY_PATH") || t.contains("binPath") {
+                            self.say(format!("[info] ImagePath actuel : {}", t));
+                        }
+                    }
+                }
+                let (okc, outc) = logic::run_cmd(
+                    "sc",
+                    &[
+                        "config",
+                        logic::SVC,
+                        "type=",
+                        "filesys",
+                        "start=",
+                        "demand",
+                        "binPath=",
+                        logic::SYS_PATH,
+                        "DisplayName=",
+                        logic::DISPLAY_NAME,
+                    ],
+                );
+                self.say(if okc {
+                    format!(
+                        "[ok] service '{}' repointé vers {}",
+                        logic::SVC,
+                        logic::SYS_PATH
+                    )
+                } else {
+                    format!("[erreur] sc config : {}", short(&outc))
+                });
                 let _ = logic::run_cmd(
                     "sc",
                     &["description", logic::SVC, logic::DESCRIPTION],
@@ -345,7 +382,7 @@ impl SetupApp {
                     if self.needs_reboot {
                         self.say("→ Normal : le mode test et/ou l'HVCI viennent d'être modifiés.\n→ REDÉMARRE le PC, puis relance cet assistant : il chargera le filtre et terminera l'installation.");
                     } else {
-                        self.say("→ Vérifie : session administrateur, mode test actif (bcdedit /enum {current}), et « Intégrité de la mémoire » désactivée (Sécurité Windows → Isolation du noyau).\n→ Code 0xC0000428 = signature refusée. Code 0x800701E7 = image du driver refusée par le noyau (structure/alignement) — installe la dernière version de l'assistant.");
+                        self.say("→ Vérifie : session administrateur, mode test actif (bcdedit /enum {current}), et « Intégrité de la mémoire » désactivée (Sécurité Windows → Isolation du noyau).\n→ Code 0xC0000428 = signature refusée. Code 0x800701E7 = image du driver refusée par le noyau (structure/alignement). Code 0x80070002 = fichier introuvable au chemin du service (ImagePath obsolète) — relance la dernière version de l'assistant, elle repointe le service automatiquement.");
                     }
                 }
             }
