@@ -18,6 +18,11 @@
 /* --- Tailles partagées --- */
 #define THROTTLE_PATH_CHARS         260     /* MAX_PATH */
 
+/* Débit maximal accepté (1 To/s) : borne le calcul de recharge du bucket
+ * (delta * Rate doit rester sans débordement, même si l'application envoie
+ * une valeur aberrante — l'utilisateur peut saisir n'importe quoi). */
+#define THROTTLE_MAX_RATE           0x0000E8D4A51000ULL   /* 10^12 o/s */
+
 /* Annotation SAL du prototype des pré-opérations (absente de certaines
  * versions du WDK) : repli sûr sur _Out_. */
 #ifndef _Flt_CompletionContext_Out_

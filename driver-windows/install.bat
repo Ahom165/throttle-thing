@@ -12,8 +12,10 @@ net stop throttle 2>nul
 
 echo Installation du driver (throttle.inf)...
 rundll32.exe SETUPAPI.DLL,InstallHinfSection DefaultInstall 132 .\throttle.inf
-if errorlevel 1 (
-    echo [ERREUR] Installation echouee. Verifie que :
+REM NEQ 0 et pas « errorlevel 1 » : rundll32/fltmc renvoient des codes
+REM NTSTATUS NEGATIFS (ex. -2146300142) que « if errorlevel 1 » laisse passer.
+if %errorlevel% NEQ 0 (
+    echo [ERREUR] Installation echouee (code %errorlevel%). Verifie que :
     echo   - tu executes ce script en tant qu'administrateur,
     echo   - throttle.inf et throttle.sys sont dans ce dossier,
     echo   - le mode test-signature est actif ^(bcdedit /set testsigning on^).
@@ -23,7 +25,7 @@ if errorlevel 1 (
 
 echo Chargement du filtre...
 fltmc load throttle
-if errorlevel 1 (
+if %errorlevel% NEQ 0 (
     echo [ERREUR] fltmc load a echoue ^(code %errorlevel%^).
     pause
     exit /b 1

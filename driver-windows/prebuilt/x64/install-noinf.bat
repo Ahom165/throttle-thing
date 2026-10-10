@@ -52,7 +52,9 @@ if not errorlevel 1 (
 
 echo Chargement du filtre...
 fltmc load %SVC%
-if errorlevel 1 (
+REM NEQ 0 et pas « errorlevel 1 » : fltmc renvoie des codes NTSTATUS NEGATIFS
+REM (ex. -2146300142) que « if errorlevel 1 » laisse passer.
+if %errorlevel% NEQ 0 (
     echo.
     echo [ERREUR] fltmc load a echoue (code %errorlevel%).
     echo   1. Verifie le mode test-signature : bcdedit /set testsigning on

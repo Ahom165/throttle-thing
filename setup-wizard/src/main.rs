@@ -175,8 +175,16 @@ impl SetupApp {
     fn start_uninstall(&mut self) {
         self.queue.clear();
         self.intent = Intent::Uninstall;
-        self.filter_loaded = false;
         self.page = Page::Progress;
+        // CheckState D'ABORD : sans lui, filter_loaded reste à sa valeur de
+        // l'ouverture (potentiellement périmée) et UnloadFilter croit que le
+        // filtre « n'était pas chargé » — un déchargement refusé (instances
+        // occupées) serait alors annoncé « rien à décharger », et le résumé
+        // final « Désinstallation terminée » alors que le filtre tourne
+        // encore. La détection est honnête et le [etat] ne se répète pas
+        // (state_announced). Avec Intent::Uninstall, CheckState n'enfile
+        // AUCUNE action d'installation.
+        self.queue.push_back(Action::CheckState);
         self.queue.push_back(Action::UnloadFilter);
         self.queue.push_back(Action::DeleteService);
         self.queue.push_back(Action::RemoveFiles);
@@ -264,7 +272,12 @@ impl SetupApp {
                     self.say(format!("[erreur] écriture du certificat : {e}"));
                     return;
                 }
-                let (ok1, out1) = logic::run_cmd("certutil", &["-addstore", "Root", logic::CER_PATH]);
+                // « -f » : écrase le certificat identique déjà présent — sans
+                // lui, une RÉINSTALLATION affiche un faux [erreur] sur Racine.
+                let (ok1, out1) = logic::run_cmd(
+                    "certutil",
+                    &["-addstore", "-f", "Root", logic::CER_PATH],
+                );
                 self.say(if ok1 {
                     "[ok] certificat de test installé dans la boutique « Racine »".to_string()
                 } else {

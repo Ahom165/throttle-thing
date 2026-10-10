@@ -383,8 +383,15 @@ ThrottleMessageNotify(
             }
         }
 
+        /* Borne des débits aberrants (garde anti-débordement du bucket) */
         gState.ReadRate = msg->Config.ReadBytesPerSec;
+        if (gState.ReadRate > THROTTLE_MAX_RATE) {
+            gState.ReadRate = THROTTLE_MAX_RATE;
+        }
         gState.WriteRate = msg->Config.WriteBytesPerSec;
+        if (gState.WriteRate > THROTTLE_MAX_RATE) {
+            gState.WriteRate = THROTTLE_MAX_RATE;
+        }
         gState.AppPid = msg->Config.AppPid;
         gState.Active = (msg->Config.Enabled != 0);
 
@@ -497,7 +504,13 @@ ThrottleConnectNotify(
  * la limitation est levée IMMÉDIATEMENT. Sans ça, une application qui
  * disparaît sans envoyer CMD_CLEAR laisserait le dossier bridé pour TOUS
  * les processus jusqu'au redémarrage — plus aucun programme ne pourrait
- * remettre l'état à zéro. */
+ * remettre l'état à zéro.
+ *
+ * Le port client est AUSSI fermé ici (FltCloseClientPort) : c'est le contrat
+ * documenté de PFLT_DISCONNECT_NOTIFY. Sans cet appel, l'objet port client
+ * côté noyau n'est jamais libéré — fuite à chaque redémarrage de
+ * l'application (l'objet ne disparaît qu'au déchargement du filtre).
+ * FltCloseClientPort met lui-même *ClientPort à NULL. */
 static VOID
 ThrottleDisconnectNotify(
     _In_opt_ PVOID ConnectionCookie
@@ -518,7 +531,10 @@ ThrottleDisconnectNotify(
     gState.WriteBpsShown = 0;
     KeReleaseSpinLock(&gStateLock, oldIrql);
 
-    gClientPort = NULL;
+    if (gClientPort != NULL) {
+        FltCloseClientPort(gFilter, &gClientPort);
+        gClientPort = NULL;
+    }
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
                "throttle: client deconnecte — limitation levee\n");
 }
@@ -555,10 +571,10 @@ ThrottleUnload(
 {
     UNREFERENCED_PARAMETER(Flags);
 
-    if (gClientPort != NULL) {
-        FltCloseClientPort(gFilter, &gClientPort);
-        gClientPort = NULL;
-    }
+    /* Pas de FltCloseClientPort ici : si un client est connecté,
+     * FltUnregisterFilter invoque ThrottleDisconnectNotify, qui ferme le
+     * port client (un seul chemin de fermeture = pas de double close).
+     * On ferme le port serveur puis on désenregistre le filtre. */
     if (gServerPort != NULL) {
         FltCloseCommunicationPort(gServerPort);
         gServerPort = NULL;
