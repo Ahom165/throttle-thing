@@ -113,6 +113,9 @@ struct SetupApp {
     filter_loaded: bool,
     needs_reboot: bool,
     app_path: Option<String>,
+    /// Résultats de la désinstallation (résumé honnête à la fin).
+    unloaded: bool,
+    service_deleted: bool,
 }
 
 impl SetupApp {
@@ -147,6 +150,8 @@ impl SetupApp {
             filter_loaded: false,
             needs_reboot: false,
             app_path: find_app_exe(),
+            unloaded: false,
+            service_deleted: false,
         }
     }
 
@@ -206,6 +211,9 @@ impl SetupApp {
                 };
                 let (ok, _) = logic::run_cmd("sc", &["query", logic::SVC]);
                 self.service_installed = ok;
+                // Filtre déjà chargé ? (`fltmc filters` liste le service.)
+                let (okf, outf) = logic::run_cmd("fltmc", &["filters"]);
+                self.filter_loaded = okf && logic::parse_filter_loaded(&outf);
                 // Détection TOUJOURS exécutée (c'est elle qui décide des
                 // actions) ; le bloc [etat], lui, ne s'affiche qu'une fois
                 // (première frame) pour ne pas répéter trois lignes identiques.
@@ -230,8 +238,17 @@ impl SetupApp {
                     ));
                 }
                 if self.intent == Intent::Install {
-                    for a in logic::install_actions(self.testsigning, self.hvci) {
-                        self.queue.push_back(a);
+                    if self.filter_loaded {
+                        // Rien à faire : réécrire throttle.sys échouerait
+                        // (fichier verrouillé par le noyau) et fltmc load
+                        // échouerait (déjà chargé) — l'installation est
+                        // déjà opérationnelle telle quelle.
+                        self.say("[info] filtre déjà chargé : le limiteur est opérationnel.");
+                        self.say("→ Pour mettre à jour le driver : Désinstaller d'abord, puis relancer cet assistant.");
+                    } else {
+                        for a in logic::install_actions(self.testsigning, self.hvci) {
+                            self.queue.push_back(a);
+                        }
                     }
                 }
             }
@@ -283,6 +300,11 @@ impl SetupApp {
                         logic::SYS_PATH,
                         logic::SYS_BYTES.len()
                     )),
+                    Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                        self.say(format!(
+                            "[erreur] écriture du driver : {e} — fichier verrouillé par le noyau (filtre chargé ?) Désinstalle d'abord."
+                        ));
+                    }
                     Err(e) => self.say(format!("[erreur] écriture du driver : {e}")),
                 }
             }
@@ -440,20 +462,53 @@ impl SetupApp {
                 }
             }
             Action::UnloadFilter => {
+                // filter_loaded reflète l'état détecté à l'ouverture : si le
+                // filtre n'était pas chargé, « rien à décharger » = but atteint.
+                let was_loaded = self.filter_loaded;
                 let (ok, out) = logic::run_cmd("fltmc", &["unload", logic::SVC]);
-                self.say(if ok {
-                    format!("[ok] filtre '{}' déchargé", logic::SVC)
+                if ok {
+                    self.unloaded = true;
+                    self.filter_loaded = false;
+                    self.say(format!("[ok] filtre '{}' déchargé", logic::SVC));
+                } else if !was_loaded {
+                    self.unloaded = true;
+                    self.say(format!(
+                        "[info] filtre non chargé (rien à décharger) : {}",
+                        short(&out)
+                    ));
                 } else {
-                    format!("[info] filtre non chargé (rien à décharger) : {}", short(&out))
-                });
+                    self.say(format!(
+                        "[info] déchargement refusé (instances occupées ?) : {}",
+                        short(&out)
+                    ));
+                }
             }
             Action::DeleteService => {
+                // La relance automatique (RunOnce) ne doit JAMAIS survivre à
+                // une désinstallation : sinon au redémarrage suivant, ce
+                // wizard réinstallerait tout seul ce que l'utilisateur vient
+                // de faire retirer.
+                let (okr, _outr) = logic::run_cmd(
+                    "reg",
+                    &["delete", logic::RUNONCE_KEY, "/v", logic::RUNONCE_VALUE, "/f"],
+                );
+                if okr {
+                    self.say("[info] relance automatique (RunOnce) annulée");
+                }
                 let (ok, out) = logic::run_cmd("sc", &["delete", logic::SVC]);
-                self.say(if ok {
-                    format!("[ok] service '{}' supprimé", logic::SVC)
+                if ok {
+                    self.service_deleted = true;
+                    self.say(format!("[ok] service '{}' supprimé", logic::SVC));
                 } else {
-                    format!("[info] service absent ou suppression impossible : {}", short(&out))
-                });
+                    // Échec parce qu'absent = objectif déjà atteint ;
+                    // échec autre (marqué pour suppression, etc.) = partiel.
+                    let (still, _) = logic::run_cmd("sc", &["query", logic::SVC]);
+                    self.service_deleted = !still;
+                    self.say(format!(
+                        "[info] service absent ou suppression impossible : {}",
+                        short(&out)
+                    ));
+                }
                 let base = format!(r"HKLM\SYSTEM\CurrentControlSet\Services\{}", logic::SVC);
                 let _ = logic::run_cmd("reg", &["delete", &base, "/f"]);
             }
@@ -461,6 +516,11 @@ impl SetupApp {
                 for path in [logic::SYS_PATH, logic::CER_PATH] {
                     match std::fs::remove_file(path) {
                         Ok(()) => self.say(format!("[ok] supprimé : {path}")),
+                        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                            self.say(format!(
+                                "[info] en cours d'utilisation (filtre chargé ?) : {path} — supprime-le après redémarrage"
+                            ));
+                        }
                         Err(_) => self.say(format!("[info] absent : {path}")),
                     }
                 }
@@ -709,8 +769,20 @@ impl SetupApp {
                 }
             }
             Intent::Uninstall => {
-                ui.heading("Désinstallation terminée");
-                ui.label("Le filtre est déchargé et le service supprimé.");
+                if self.unloaded && self.service_deleted {
+                    ui.heading("Désinstallation terminée");
+                    ui.label("Le filtre est déchargé et le service supprimé.");
+                } else {
+                    ui.heading("Désinstallation partielle");
+                    ui.label("Certains éléments sont restés en place (fichier ou service en cours d'utilisation).");
+                    ui.label("Redémarre le PC puis relance « Désinstaller » : tout sera retiré.");
+                    ui.add_space(4.0);
+                    ui.label(format!(
+                        "Filtre déchargé : {} — Service supprimé : {}",
+                        if self.unloaded { "oui" } else { "non" },
+                        if self.service_deleted { "oui" } else { "non" },
+                    ));
+                }
                 ui.label(
                     egui::RichText::new(
                         "Pour quitter le mode test-signature : bcdedit /set testsigning off, puis redémarre.",

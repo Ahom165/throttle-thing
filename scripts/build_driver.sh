@@ -23,8 +23,13 @@ set -euo pipefail
 B=/home/z/my-project/.wdkbuild            # répertoire de travail
 V=10.0.26100.6584                         # version du WDK NuGet
 SV=10.0.26100.9169                        # version du SDK NuGet
-SRC=/home/z/my-project/download/throttle-folder/driver-windows/throttle.c
-OUT=/home/z/my-project/download/throttle-folder/driver-windows/prebuilt/x64
+# Chemins du dépôt RELATIFS au script : le build marche quel que soit
+# l'emplacement du clone (l'ancien chemin absolu download/throttle-folder
+# ne correspond plus à rien).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
+SRC="$REPO/driver-windows/throttle.c"
+OUT="$REPO/driver-windows/prebuilt/x64"
 
 mkdir -p "$B" && cd "$B"
 
@@ -46,7 +51,7 @@ mkdir -p "$B" && cd "$B"
 
 # --- 3. overlay insensible à la casse ------------------------------------
 rm -rf overlay
-python3 "$(dirname "$0")/build_case_overlay.py"
+python3 "$SCRIPT_DIR/build_case_overlay.py"
 
 # --- 4. compilation -------------------------------------------------------
 O="$B/overlay"
@@ -100,10 +105,10 @@ cp throttle-signed.sys "$OUT/throttle.sys"
 cp throttle-test.cer  "$OUT/throttle-test.cer"
 
 # Le wizard embarque le .sys + le .cer (setup-wizard/embed) : resynchronisation.
-EMBED=/home/z/my-project/download/throttle-folder/setup-wizard/embed
+EMBED="$REPO/setup-wizard/embed"
 mkdir -p "$EMBED"
 cp throttle-signed.sys "$EMBED/throttle.sys"
 cp throttle-test.cer   "$EMBED/throttle-test.cer"
 
-python3 "$(dirname "$0")/pe_check.py" "$OUT/throttle.sys"
+python3 "$SCRIPT_DIR/pe_check.py" "$OUT/throttle.sys"
 echo "throttle.sys compilé, linké et signé → $OUT"

@@ -31,7 +31,9 @@ if exist "%CER%" (
 
 echo Creation du service noyau...
 sc create %SVC% type= filesys start= demand binPath= "%SYS%" DisplayName= "Limiteur de debit dossier (minifilter)" >nul 2>&1
-sc config %SVC% start= demand >nul 2>&1
+REM binPath aussi dans sc config : un service PRE-EXISTANT (d'une ancienne
+REM installation) garde son ancien ImagePath sinon -> fltmc load 0x80070002.
+sc config %SVC% type= filesys start= demand binPath= "%SYS%" >nul 2>&1
 sc description %SVC% "Bridge le debit lecture/ecriture d'un dossier pour tous les processus" >nul 2>&1
 
 echo Enregistrement de l'instance (altitude de test 399999)...

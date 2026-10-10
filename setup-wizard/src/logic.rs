@@ -141,6 +141,16 @@ pub fn parse_hvci_enabled(reg_query_out: &str) -> Option<bool> {
     None
 }
 
+/// Détermine si le filtre « throttle » est déjà chargé, à partir de la sortie
+/// de `fltmc filters`. Les en-têtes sont localisés mais la ligne de données
+/// contient le nom du service littéral dans sa première colonne.
+pub fn parse_filter_loaded(fltmc_out: &str) -> bool {
+    fltmc_out.lines().any(|l| {
+        l.split_whitespace()
+            .any(|w| w.eq_ignore_ascii_case("throttle"))
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -212,5 +222,17 @@ mod tests {
         assert_eq!(parse_hvci_enabled(off), Some(false));
         assert_eq!(parse_hvci_enabled("ERREUR : impossible de trouver"), None);
         assert_eq!(parse_hvci_enabled(""), None);
+    }
+
+    #[test]
+    fn parse_filtre_deja_charge() {
+        let charge = "\nNombre de filtres : 3\n\n\nHauteur du filtre   Nom du filtre   Instances   Cadre\n\n     399999    throttle     1    0\n     389999    luafv        1    0\n";
+        let absent = "\nNombre de filtres : 2\n\n     389999    luafv        1    0\n     340000    wcifs        1    0\n";
+        // La ligne d'en-tête localisée ne doit PAS faire croire au chargement.
+        let entete_seule = "\nNom du filtre     Altitude\n\n";
+        assert!(parse_filter_loaded(charge));
+        assert!(!parse_filter_loaded(absent));
+        assert!(!parse_filter_loaded(entete_seule));
+        assert!(!parse_filter_loaded(""));
     }
 }

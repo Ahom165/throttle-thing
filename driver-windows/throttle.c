@@ -218,8 +218,14 @@ ThrottlePathMatches(
     PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
     BOOLEAN match = FALSE;
     NTSTATUS status;
+    USHORT targetLen;
 
-    if (gState.TargetPathLen == 0) {
+    /* Lecture « volatile » : TargetPathLen est publié EN DERNIER par
+     * ThrottleMessageNotify (SET_CONFIG) après une barrière mémoire —
+     * un lecteur concurrent ne peut donc jamais matcher un buffer
+     * à moitié écrit (il voit soit l'ancienne config, soit len == 0). */
+    targetLen = *(volatile USHORT *)&gState.TargetPathLen;
+    if (targetLen == 0) {
         return FALSE;
     }
 
@@ -234,7 +240,7 @@ ThrottlePathMatches(
     match = ThrottlePrefixMatch(nameInfo->Name.Buffer,
                                 (USHORT)(nameInfo->Name.Length / sizeof(WCHAR)),
                                 gState.TargetPath,
-                                gState.TargetPathLen);
+                                targetLen);
 
     FltReleaseFileNameInformation(nameInfo);
     return match;
@@ -354,6 +360,14 @@ ThrottleMessageNotify(
 
         KeAcquireSpinLock(&gStateLock, &oldIrql);
 
+        /* Publication en deux temps (les pré-ops lisent la config SANS le
+         * verrou) : longueur à 0 d'abord (plus de matching pendant la copie),
+         * écriture du buffer, puis longueur EN DERNIER après barrière.
+         * Un lecteur voit soit l'ancienne config, soit la nouvelle complète
+         * — jamais un état intermédiaire à moitié écrit. */
+        *(volatile USHORT *)&gState.TargetPathLen = 0;
+        KeMemoryBarrier();
+
         RtlZeroMemory(gState.TargetPath, sizeof(gState.TargetPath));
         RtlCopyMemory(gState.TargetPath,
                       msg->Config.TargetPath,
@@ -368,7 +382,6 @@ ThrottleMessageNotify(
                 gState.TargetPath[i] = RtlUpcaseUnicodeChar(gState.TargetPath[i]);
             }
         }
-        gState.TargetPathLen = (USHORT)n;
 
         gState.ReadRate = msg->Config.ReadBytesPerSec;
         gState.WriteRate = msg->Config.WriteBytesPerSec;
@@ -384,6 +397,11 @@ ThrottleMessageNotify(
         gState.ReadBpsShown = 0;
         gState.WriteBpsShown = 0;
 
+        /* Dernier : la nouvelle config devient visible pour les lecteurs
+         * qui ne prennent pas le verrou (ThrottlePathMatches). */
+        KeMemoryBarrier();
+        *(volatile USHORT *)&gState.TargetPathLen = (USHORT)n;
+
         KeReleaseSpinLock(&gStateLock, oldIrql);
 
         DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
@@ -397,8 +415,11 @@ ThrottleMessageNotify(
     case THROTTLE_CMD_CLEAR:
         KeAcquireSpinLock(&gStateLock, &oldIrql);
         gState.Active = FALSE;
+        /* Longueur à 0 d'abord : les lecteurs sans verrou cessent de
+         * matcher immédiatement, même avant la fin de la remise à zéro. */
+        *(volatile USHORT *)&gState.TargetPathLen = 0;
+        KeMemoryBarrier();
         gState.TargetPath[0] = L'\0';
-        gState.TargetPathLen = 0;
         gState.ReadRate = 0;
         gState.WriteRate = 0;
         gState.ReadBpsShown = 0;
@@ -472,16 +493,34 @@ ThrottleConnectNotify(
     return STATUS_SUCCESS;
 }
 
+/* Déconnexion du client (application fermée proprement, plantée ou tuée) :
+ * la limitation est levée IMMÉDIATEMENT. Sans ça, une application qui
+ * disparaît sans envoyer CMD_CLEAR laisserait le dossier bridé pour TOUS
+ * les processus jusqu'au redémarrage — plus aucun programme ne pourrait
+ * remettre l'état à zéro. */
 static VOID
 ThrottleDisconnectNotify(
     _In_opt_ PVOID ConnectionCookie
     )
 {
+    KIRQL oldIrql;
+
     UNREFERENCED_PARAMETER(ConnectionCookie);
+
+    KeAcquireSpinLock(&gStateLock, &oldIrql);
+    gState.Active = FALSE;
+    *(volatile USHORT *)&gState.TargetPathLen = 0;
+    KeMemoryBarrier();
+    gState.TargetPath[0] = L'\0';
+    gState.ReadRate = 0;
+    gState.WriteRate = 0;
+    gState.ReadBpsShown = 0;
+    gState.WriteBpsShown = 0;
+    KeReleaseSpinLock(&gStateLock, oldIrql);
 
     gClientPort = NULL;
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-               "throttle: client deconnecte\n");
+               "throttle: client deconnecte — limitation levee\n");
 }
 
 /* ------------------------------------------------------------------ */

@@ -447,7 +447,21 @@ fn fmt_limit(bps: u64) -> String {
     }
 }
 
-/// Heure locale grossière (UTC) pour horodater le journal.
+/// Heure LOCALE pour horodater le journal (GetLocalTime sous Windows —
+/// l'UTC décalait les timestamps de l'heure du fuseau de l'utilisateur).
+#[cfg(windows)]
+fn hms_now() -> String {
+    use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+    let mut st = unsafe { std::mem::zeroed() };
+    unsafe { GetLocalTime(&mut st) };
+    format!(
+        "[{:02}:{:02}:{:02}]",
+        st.wHour, st.wMinute, st.wSecond
+    )
+}
+
+/// Repli hors Windows : UTC (aucun impact, l'exe est Windows).
+#[cfg(not(windows))]
 fn hms_now() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
