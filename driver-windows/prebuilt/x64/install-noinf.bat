@@ -30,10 +30,12 @@ if exist "%CER%" (
 )
 
 echo Creation du service noyau...
-sc create %SVC% type= filesys start= demand binPath= "%SYS%" DisplayName= "Limiteur de debit dossier (minifilter)" >nul 2>&1
-REM binPath aussi dans sc config : un service PRE-EXISTANT (d'une ancienne
-REM installation) garde son ancien ImagePath sinon -> fltmc load 0x80070002.
-sc config %SVC% type= filesys start= demand binPath= "%SYS%" >nul 2>&1
+REM binPath DOIT être un chemin NT (\??\) : le chargeur noyau lit ImagePath
+REM tel quel et ne sait pas résoudre « C:\... » (donne fltmc load 0x80070002
+REM alors que le fichier existe). Un service PRE-EXISTANT garde son ancien
+REM ImagePath sinon -> d'où le sc config systématique ci-dessous.
+sc create %SVC% type= filesys start= demand binPath= "\??\%SYS%" DisplayName= "Limiteur de debit dossier (minifilter)" >nul 2>&1
+sc config %SVC% type= filesys start= demand binPath= "\??\%SYS%" >nul 2>&1
 sc description %SVC% "Bridge le debit lecture/ecriture d'un dossier pour tous les processus" >nul 2>&1
 
 echo Enregistrement de l'instance (altitude de test 399999)...
@@ -61,6 +63,9 @@ if %errorlevel% NEQ 0 (
     echo      (puis REDERMARRE) — obligatoire pour un driver non certifie.
     echo   2. Si besoin, importe le certificat de test :
     echo      certutil -addstore Root "%~dp0throttle-test.cer"
+    echo   3. Code 0x80070002 : verifie « sc qc throttle » — BINARY_PATH_NAME doit
+    echo      commencer par \??\ (ce script l'ecrit desormais), et regarde si ton
+    echo      antivirus n'a pas mis throttle.sys en quarantaine.
     pause & exit /b 1
 )
 

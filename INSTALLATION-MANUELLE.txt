@@ -1,0 +1,164 @@
+================================================================================
+ INSTALLATION MANUELLE — Limiteur de débit dossier (minifilter « throttle »)
+================================================================================
+Dernière mise à jour : 2026-10-10 (correctif 0x80070002 : ImagePath doit être
+un chemin NT « \??\... » — les versions précédentes écrivaient « C:\... »,
+que le chargeur noyau ne sait pas résoudre).
+
+Ce guide couvre l'installation SANS l'assistant (throttle-setup.exe). C'est la
+méthode fiable si l'assistant a échoué : chaque étape se vérifie une par une.
+
+--------------------------------------------------------------------------------
+0. PRÉREQUIS (à vérifier AVANT toute chose)
+--------------------------------------------------------------------------------
+a) Une session ADMINISTRATEUR, console élevée :
+   Touche Windows → taper « cmd » → clic droit → « Exécuter en tant qu'admin ».
+
+b) Mode test-signature ACTIF (driver de test non certifié Microsoft) :
+       bcdedit /enum {current}
+   → la ligne « testsigning » doit afficher « Oui » / « Yes ».
+   Si ce n'est pas le cas :
+       bcdedit /set testsigning on
+   puis REDÉMARRER le PC (obligatoire, sans exception).
+
+c) « Intégrité de la mémoire » (HVCI) DÉSACTIVÉE — Windows 11 bloque les
+   drivers de test tant qu'elle est active, même en mode test :
+   Sécurité Windows → Isolation du noyau → « Intégrité de la mémoire » = Désactivé
+   (si tu viens de la désactiver : redémarrer).
+
+d) Un antivirus tiers (ou Defender très zélé) peut supprimer throttle.sys
+   dès sa copie. Si tu as des doutes, ajoute d'ores et déjà une EXCLUSION de
+   dossier :
+   Sécurité Windows → Protection antivirus → Gérer les paramètres → Exclusions
+   → Ajouter un dossier → C:\ProgramData\ThrottleFolder
+
+--------------------------------------------------------------------------------
+1. COPIE DES FICHIERS DU DRIVER
+--------------------------------------------------------------------------------
+Depuis le dossier « project\driver-windows\prebuilt\x64\ » du zip :
+   copie throttle.sys  et  throttle-test.cer  vers :
+
+       C:\ProgramData\ThrottleFolder\
+
+En console admin :
+
+   mkdir C:\ProgramData\ThrottleFolder 2>nul
+   copy /Y "<chemin du zip>\project\driver-windows\prebuilt\x64\throttle.sys" C:\ProgramData\ThrottleFolder\
+   copy /Y "<chemin du zip>\project\driver-windows\prebuilt\x64\throttle-test.cer" C:\ProgramData\ThrottleFolder\
+
+Vérification : les deux fichiers doivent y être (throttle.sys ≈ 30 656 octets).
+
+--------------------------------------------------------------------------------
+2. CERTIFICAT DE TEST (Racine + Éditeurs approuvés)
+--------------------------------------------------------------------------------
+   certutil -addstore -f Root C:\ProgramData\ThrottleFolder\throttle-test.cer
+   certutil -addstore -f TrustedPublisher C:\ProgramData\ThrottleFolder\throttle-test.cer
+
+Chaque commande doit répondre « Certificat '' ajouté au magasin » (ou équivalent).
+
+--------------------------------------------------------------------------------
+3. SERVICE NOYAU — avec le chemin NT « \??\ » (LE point critique)
+--------------------------------------------------------------------------------
+Création (ou recréation propre) du service :
+
+   fltmc unload throttle 2>nul
+   sc stop throttle 2>nul
+   sc delete throttle 2>nul
+   (si « [SC] DeleteService SUCCESS 1072 » : le service est marqué pour
+    suppression — REDÉMARRE le PC avant de continuer.)
+
+   sc create throttle type= filesys start= demand binPath= "\??\C:\ProgramData\ThrottleFolder\throttle.sys" DisplayName= "Limiteur de debit dossier (minifilter)"
+
+⚠️  Le préfixe « \??\ » N'EST PAS OPTIONNEL. Sans lui, fltmc load répondra
+    0x80070002 (« fichier introuvable ») alors que le fichier existe : le
+    chargeur noyau lit ImagePath comme un chemin NT et ne sait pas résoudre
+    « C:\... ».
+
+Enregistrement de l'instance minifilter (altitude de test 399999) :
+
+   reg add HKLM\SYSTEM\CurrentControlSet\Services\throttle /v DefaultInstance /t REG_SZ /d "throttle - Default Instance" /f
+   reg add "HKLM\SYSTEM\CurrentControlSet\Services\throttle\Instances\throttle - Default Instance" /v Altitude /t REG_SZ /d 399999 /f
+   reg add "HKLM\SYSTEM\CurrentControlSet\Services\throttle\Instances\throttle - Default Instance" /v Flags /t REG_DWORD /d 0 /f
+
+Vérification OBLIGATOIRE :
+
+   sc qc throttle
+   → BINARY_PATH_NAME : \??\C:\ProgramData\ThrottleFolder\throttle.sys
+
+Si BINARY_PATH_NAME ne commence PAS par « \??\ », corrige :
+
+   sc config throttle type= filesys start= demand binPath= "\??\C:\ProgramData\ThrottleFolder\throttle.sys"
+
+--------------------------------------------------------------------------------
+4. CHARGEMENT DU FILTRE + VÉRIFICATIONS
+--------------------------------------------------------------------------------
+   fltmc load throttle
+   fltmc instances -f throttle     → doit lister « throttle - Default Instance »
+   fltmc filters                   → « throttle » doit apparaître (altitude 399999)
+
+Puis lance throttle-folder.exe (en administrateur) : choisis le dossier et le
+débit, clique « Activer ».
+
+--------------------------------------------------------------------------------
+5. MÉTHODE RAPIDE : install-noinf.bat
+--------------------------------------------------------------------------------
+Le script project\driver-windows\prebuilt\x64\install-noinf.bat fait les étapes
+1 à 4 automatiquement (certificats, service avec le bon chemin NT, instances,
+HVCI, chargement). Clic droit → « Exécuter en tant qu'administrateur » depuis
+le dossier qui contient throttle.sys et throttle-test.cer.
+Sa version actuelle écrit binPath avec « \??\ » — les versions antérieures au
+10/10/2026 non, ne les réutilise pas.
+
+--------------------------------------------------------------------------------
+6. DÉSINSTALLATION MANUELLE
+--------------------------------------------------------------------------------
+   fltmc unload throttle
+   sc delete throttle
+   reg delete HKLM\SYSTEM\CurrentControlSet\Services\throttle /f
+   del C:\ProgramData\ThrottleFolder\throttle.sys
+   del C:\ProgramData\ThrottleFolder\throttle-test.cer
+   (optionnel : certutil -delstore Root "Throttle Dev Test"
+                certutil -delstore TrustedPublisher "Throttle Dev Test"
+   Pour quitter le mode test : bcdedit /set testsigning off  + redémarrer.)
+
+--------------------------------------------------------------------------------
+7. CODES D'ERREUR — TABLEAU DE DIAGNOSTIC
+--------------------------------------------------------------------------------
+0x80070002 « fichier introuvable »
+    Cause n°1 : ImagePath du service sans le préfixe NT « \??\ » → voir §3
+    (sc qc throttle pour vérifier). C'était le bug du wizard avant le
+    10/10/2026 : son « repointage » écrasait un chemin correct avec « C:\... ».
+    Cause n°2 : throttle.sys supprimé par l'antivirus entre la copie et le
+    chargement → §0.d (quarantaine + exclusion de dossier).
+
+0x800701E7 image refusée par le noyau
+    Driver .sys défectueux (mauvais PE) — n'arrive plus avec le driver
+    fourni (COFF 0x2022, aligné 4 Ko, base 0x1C0000000). Utilise le
+    throttle.sys de CE zip, pas une ancienne copie.
+
+0xC0000428 / 0x800703F1 signature refusée
+    Mode test inactif, HVCI active, ou certificat absent → §0.b, §0.c, §2.
+    Pense à REDÉMARRER après bcdedit /set testsigning on.
+
+1073 à la création du service
+    Normal si le service existait déjà : passe à la suite (les commandes
+    sc config / reg add ci-dessus mettent tout à jour).
+
+1072 à la suppression du service
+    Service encore marqué pour suppression : redémarre le PC.
+
+Le filtre se charge mais rien ne se passe côté app
+    L'application (throttle-folder.exe) doit être lancée en administrateur.
+    Elle communique avec le filtre par port de filtrage : si tu l'as lancée
+    AVANT le chargement du filtre, referme-la et relance-la.
+
+--------------------------------------------------------------------------------
+8. REMARQUE SUR L'ASSISTANT (throttle-setup.exe)
+--------------------------------------------------------------------------------
+La version 2026-10-10 corrige le 0x80070002 : elle écrit désormais binPath au
+format NT « \??\... » (sc create ET sc config), relit la configuration après
+écriture pour la prouver dans son journal ([ok] vérifié : ImagePath = ...),
+et détecte si throttle.sys disparaît entre la copie et le chargement (message
+antivirus explicite). Si tu réessaies l'assistant, son journal te dira
+exactement où ça bloque le cas échéant.
+================================================================================

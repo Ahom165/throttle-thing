@@ -322,6 +322,9 @@ impl SetupApp {
                 }
             }
             Action::CreateService => {
+                // binPath DOIT être un chemin NT (\??\) : c'est la valeur
+                // ImagePath lue directement par le chargeur noyau, qui ne
+                // sait pas résoudre « C:\... » (donne 0x80070002).
                 let (ok, out) = logic::run_cmd(
                     "sc",
                     &[
@@ -332,7 +335,7 @@ impl SetupApp {
                         "start=",
                         "demand",
                         "binPath=",
-                        logic::SYS_PATH,
+                        logic::SYS_NT_PATH,
                         "DisplayName=",
                         logic::DISPLAY_NAME,
                     ],
@@ -347,16 +350,24 @@ impl SetupApp {
                     )
                 });
                 // Un service pré-existant peut pointer vers un ancien
-                // binPath (fichier déplacé/supprimé) : au chargement ça
+                // binPath (fichier déplacé/supprimé) ou vers une forme
+                // Win32 non résoluble par le noyau : au chargement ça
                 // donne 0x80070002 = fichier introuvable. On journalise
-                // son ImagePath puis on force la configuration à jour.
+                // son ImagePath PUIS on force la configuration à jour.
                 let (okq, outq) = logic::run_cmd("sc", &["qc", logic::SVC]);
                 if okq {
-                    for l in outq.lines() {
-                        let t = l.trim();
-                        if t.contains("BINARY_PATH") || t.contains("binPath") {
-                            self.say(format!("[info] ImagePath actuel : {}", t));
+                    match logic::parse_binary_path(&outq) {
+                        Some(p) => {
+                            self.say(format!("[info] ImagePath actuel : {}", p));
+                            if !logic::nt_path_ok(&p) {
+                                self.say(format!(
+                                    "[attention] ce chemin n'est pas au format NT (\\??\\) : le chargement donnerait 0x80070002 — correction ci-dessous."
+                                ));
+                            }
                         }
+                        None => self.say(
+                            "[info] ImagePath illisible (sc qc) : configuration forcée ci-dessous.",
+                        ),
                     }
                 }
                 let (okc, outc) = logic::run_cmd(
@@ -369,7 +380,7 @@ impl SetupApp {
                         "start=",
                         "demand",
                         "binPath=",
-                        logic::SYS_PATH,
+                        logic::SYS_NT_PATH,
                         "DisplayName=",
                         logic::DISPLAY_NAME,
                     ],
@@ -378,11 +389,30 @@ impl SetupApp {
                     format!(
                         "[ok] service '{}' repointé vers {}",
                         logic::SVC,
-                        logic::SYS_PATH
+                        logic::SYS_NT_PATH
                     )
                 } else {
                     format!("[erreur] sc config : {}", short(&outc))
                 });
+                if okc {
+                    // Vérification : on RELIT la configuration pour prouver
+                    // dans le journal que l'ImagePath est bien la forme NT
+                    // (le repoint écrase aussi — à tort — un chemin correct
+                    // si l'utilisateur l'avait fixé à la main).
+                    let (_v, outv) = logic::run_cmd("sc", &["qc", logic::SVC]);
+                    match logic::parse_binary_path(&outv) {
+                        Some(p) if logic::nt_path_ok(&p) => {
+                            self.say(format!("[ok] vérifié : ImagePath = {}", p));
+                        }
+                        Some(p) => self.say(format!(
+                            "[erreur] ImagePath toujours non conforme après config : {}",
+                            p
+                        )),
+                        None => self.say(
+                            "[info] vérification de l'ImagePath impossible (sc qc illisible)",
+                        ),
+                    }
+                }
                 let _ = logic::run_cmd(
                     "sc",
                     &["description", logic::SVC, logic::DESCRIPTION],
@@ -406,6 +436,10 @@ impl SetupApp {
                 log_reg(self, ok, &out, "flags");
             }
             Action::LoadFilter => {
+                // Le fichier doit exister AU MOMENT du chargement : un
+                // antivirus (Defender) peut le mettre en quarantaine entre
+                // la copie (DeploySys) et ici — même symptôme 0x80070002.
+                let fichier_present = std::fs::metadata(logic::SYS_PATH).is_ok();
                 let (ok, out) = logic::run_cmd("fltmc", &["load", logic::SVC]);
                 self.filter_loaded = ok;
                 if ok {
@@ -416,8 +450,20 @@ impl SetupApp {
                     self.say(format!("[erreur] fltmc load : {}", short(&out)));
                     if self.needs_reboot {
                         self.say("→ Normal : le mode test et/ou l'HVCI viennent d'être modifiés.\n→ REDÉMARRE le PC, puis relance cet assistant : il chargera le filtre et terminera l'installation.");
+                    } else if !fichier_present {
+                        self.say(format!(
+                            "[attention] {} n'existe PLUS au moment du chargement.\n→ Cause quasi certaine : l'antivirus (Windows Defender ?) l'a mis en quarantaine.\n→ Restaure-le (Sécurité Windows → Protection antivirus → Historique de la protection), ajoute une exclusion pour {}, puis relance l'assistant.",
+                            logic::SYS_PATH,
+                            logic::INSTALL_DIR
+                        ));
+                    } else if out.contains("80070002") {
+                        self.say(format!(
+                            "[attention] 0x80070002 : le fichier existe pourtant — l'ImagePath du service n'était pas au format NT (\\??\\).\n→ Vérifie : sc qc {} → BINARY_PATH_NAME doit valoir {}\n→ L'assistant écrit désormais ce format automatiquement : relance-le. Si l'erreur persiste malgré un ImagePath conforme, regarde la quarantaine de l'antivirus.",
+                            logic::SVC,
+                            logic::SYS_NT_PATH
+                        ));
                     } else {
-                        self.say("→ Vérifie : session administrateur, mode test actif (bcdedit /enum {current}), et « Intégrité de la mémoire » désactivée (Sécurité Windows → Isolation du noyau).\n→ Code 0xC0000428 = signature refusée. Code 0x800701E7 = image du driver refusée par le noyau (structure/alignement). Code 0x80070002 = fichier introuvable au chemin du service (ImagePath obsolète) — relance la dernière version de l'assistant, elle repointe le service automatiquement.");
+                        self.say("→ Vérifie : session administrateur, mode test actif (bcdedit /enum {current}), et « Intégrité de la mémoire » désactivée (Sécurité Windows → Isolation du noyau).\n→ Code 0xC0000428 = signature refusée. Code 0x800701E7 = image du driver refusée par le noyau (structure/alignement).");
                     }
                 }
             }
@@ -734,6 +780,8 @@ impl SetupApp {
                     egui::Color32::from_rgb(235, 100, 100)
                 } else if line.starts_with("[ok]") {
                     egui::Color32::from_rgb(140, 220, 140)
+                } else if line.starts_with("[attention]") {
+                    egui::Color32::from_rgb(235, 190, 100)
                 } else if line.starts_with("[info]") || line.starts_with("[etat]") {
                     egui::Color32::from_gray(160)
                 } else {

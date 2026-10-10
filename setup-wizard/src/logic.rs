@@ -11,6 +11,14 @@ pub const CER_BYTES: &[u8] = include_bytes!("../embed/throttle-test.cer");
 pub const SVC: &str = "throttle";
 pub const INSTALL_DIR: &str = r"C:\ProgramData\ThrottleFolder";
 pub const SYS_PATH: &str = r"C:\ProgramData\ThrottleFolder\throttle.sys";
+/// ImagePath au format NT — LA forme que le chargeur noyau exige dans la
+/// valeur ImagePath du service. Un chemin Win32 nu (« C:\... ») est préfixé
+/// en interne par `\SystemRoot\` et devient introuvable : fltmc load
+/// répond alors 0x80070002 (fichier introuvable) alors que le fichier existe.
+/// C'est exactement le bug observé sur le terrain : le service pré-existant
+/// pointait vers `\??\C:\ProgramData\...` et le `sc config` du wizard
+/// l'écrasait avec la forme Win32 — cassant un ImagePath correct.
+pub const SYS_NT_PATH: &str = r"\??\C:\ProgramData\ThrottleFolder\throttle.sys";
 pub const CER_PATH: &str = r"C:\ProgramData\ThrottleFolder\throttle-test.cer";
 pub const DISPLAY_NAME: &str = "Limiteur de debit dossier (minifilter)";
 pub const DESCRIPTION: &str = "Limite le debit lecture/ecriture d'un dossier pour tous les processus";
@@ -141,6 +149,34 @@ pub fn parse_hvci_enabled(reg_query_out: &str) -> Option<bool> {
     None
 }
 
+/// Extrait le champ BINARY_PATH_NAME d'une sortie `sc qc <service>`.
+/// Format typique (la locale change le libellé autour, pas la valeur) :
+/// « BINARY_PATH_NAME   : \??\C:\ProgramData\ThrottleFolder\throttle.sys ».
+/// On coupe au PREMIER « : » uniquement — la valeur (chemin DOS) contient
+/// elle-même des « : » qu'il ne faut pas interpréter.
+pub fn parse_binary_path(sc_qc_out: &str) -> Option<String> {
+    for line in sc_qc_out.lines() {
+        let t = line.trim();
+        if t.contains("BINARY_PATH") || t.contains("binPath") {
+            if let Some((_avant, apres)) = t.split_once(':') {
+                let p = apres.trim();
+                if !p.is_empty() {
+                    return Some(p.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Un ImagePath exploitable par le chargeur noyau doit être un chemin NT :
+/// `\??\...` (chemin DOS préfixé) ou `\SystemRoot\...` (relatif à Windows).
+/// Un chemin Win32 nu (« C:\... ») n'en fait PAS partie.
+pub fn nt_path_ok(path: &str) -> bool {
+    let p = path.to_ascii_lowercase();
+    p.starts_with(r"\??\") || p.starts_with(r"\systemroot\")
+}
+
 /// Détermine si le filtre « throttle » est déjà chargé, à partir de la sortie
 /// de `fltmc filters`. Les en-têtes sont localisés mais la ligne de données
 /// contient le nom du service littéral dans sa première colonne.
@@ -222,6 +258,40 @@ mod tests {
         assert_eq!(parse_hvci_enabled(off), Some(false));
         assert_eq!(parse_hvci_enabled("ERREUR : impossible de trouver"), None);
         assert_eq!(parse_hvci_enabled(""), None);
+    }
+
+    #[test]
+    fn chemin_nt_conforme() {
+        assert!(nt_path_ok(r"\??\C:\ProgramData\ThrottleFolder\throttle.sys"));
+        assert!(nt_path_ok(r"\SystemRoot\System32\drivers\throttle.sys"));
+        // Les formes cassées observées sur le terrain :
+        assert!(!nt_path_ok(r"C:\ProgramData\ThrottleFolder\throttle.sys"));
+        assert!(!nt_path_ok("throttle.sys"));
+        // La constante embarquée DOIT rester la forme NT canonique : si un
+        // jour on la « simplifie » en chemin Win32, ce test doit saigner.
+        assert!(nt_path_ok(SYS_NT_PATH), "SYS_NT_PATH doit être un chemin NT");
+        assert!(SYS_NT_PATH.ends_with(r"\throttle.sys"));
+        assert_eq!(SYS_PATH, &SYS_NT_PATH[4..]);
+    }
+
+    #[test]
+    fn parse_sc_qc_binary_path() {
+        // Sortie réelle de sc qc (locale FR : le libellé reste anglais).
+        let out = "\r\n        TYPE               : 2   FILE_SYSTEM_DRIVER\r\n\
+                  \x20        BINARY_PATH_NAME   : \\??\\C:\\ProgramData\\ThrottleFolder\\throttle.sys\r\n\
+                  \x20        LOAD_ORDER_GROUP   : FSFilter Activity Monitor\r\n";
+        assert_eq!(
+            parse_binary_path(out).as_deref(),
+            Some(r"\??\C:\ProgramData\ThrottleFolder\throttle.sys")
+        );
+        // Les « : » du chemin DOS ne doivent pas couper l'extraction.
+        assert_eq!(
+            parse_binary_path("BINARY_PATH_NAME : \\??\\C:\\a b\\c.sys\n").as_deref(),
+            Some(r"\??\C:\a b\c.sys")
+        );
+        // Sortie sans champ binaire → None (et pas de panique).
+        assert_eq!(parse_binary_path("  [SC] QueryServiceConfig : SUCCESS\n"), None);
+        assert_eq!(parse_binary_path(""), None);
     }
 
     #[test]
